@@ -23,11 +23,11 @@ from .base import OperatorLayerBase
 
 class Linear(OperatorLayerBase):
     '''
-	Notes:
-	If the bias occurs before the GEMM, then its 1 write (bias expansion).
-	If the bias occurs after, then its 1 read and 1 write.
-	bias in bprop is a reduction and hence is 1 read.
-	'''
+    Notes:
+    If the bias occurs before the GEMM, then its 1 write (bias expansion).
+    If the bias occurs after, then its 1 read and 1 write.
+    Bias in bprop is a reduction and hence is 1 read.
+    '''
 
     gemmKernels = [
         "gemm", "gemv", "dot_kernel", "splitKreduce_kernel",
@@ -35,23 +35,28 @@ class Linear(OperatorLayerBase):
     ]
 
     biasKernels = [
-        "kernelReduceContigDim", "kernelReduceNoncontigDim_shared",
-        "elementwise_kernel", "reduce_kernel", "kernelPointwiseApply2",
-        "2d_grouped_direct_kernel"
+        "kernelReduceContigDim",
+        "kernelReduceNoncontigDim_shared",
+        "elementwise_kernel",
+        "reduce_kernel",
+        "kernelPointwiseApply2",
+        "2d_grouped_direct_kernel",
+        "enable_if",
+        "cublasLt::epilogue::impl::globalKernel"
     ]
 
     def setXWBMNK(self, args):
         x = None
         w = None
         b = None
-        if (len(args) == 2):
+        if len(args) == 2:
             x, w = args
-        elif (len(args) == 3):
+        elif len(args) == 3:
             x, w, b = args
             assert (x['type'] == w['type'] == "tensor")
-            if (b['type'] == "tensor"):
+            if b['type'] == "tensor":
                 assert (len(b['shape']) == 1)
-            elif (b['type'] == "NoneType"):
+            elif b['type'] == "NoneType":
                 assert b['value'] is None
                 b = None
             else:
@@ -76,7 +81,6 @@ class Linear(OperatorLayerBase):
         self.type = t1
 
         # M, N, K
-        #n = Utility.numElems(x[0:-1])
         n = self.x[0:-1]
         k = self.x[-1]
         m, k1 = self.w
@@ -114,37 +118,8 @@ class Linear(OperatorLayerBase):
         else:
             assert any(x in d.name for x in Linear.biasKernels), f"Kernel name: {d.name}"
             self.op_ = "bias"
-        '''
-		elif (("kernelPointwiseApply2" in d.name) or ("kernelReduceContigDim" in d.name) or ("kernelReduceNoncontigDim_shared" in d.name)):
-			#bias expansion was before the gemm
-			self.op_ = "bias"
-
-		elif ("elementwise_kernel" in d.name):
-			#Bias addition happens later with a broadcast tensor
-			self.op_ = "bias"
-			assert (len(d.argMarker) == 2)
-			marker = eval(d.argMarker[1])
-			mod = marker['mod']
-			op = marker['op']
-			args = marker['args']
-
-			assert (mod == "Tensor")
-			assert (op == "__iadd__")
-			assert (len(args) == 2)
-			mn = args[0]['shape']
-			b = args[1]['shape']
-			assert (len(b) == 1)
-
-			assert (mn == (self.n + (self.m,)))
-			assert (b == self.b)
-
-		else:
-			assert False
-		'''
 
     def params(self):
-        #p = OrderedDict([('X', self.x), ('W', self.w), ('B', self.b), ('type', self.type)])
-
         m, n, k, x, w, t = self.m, self.n, self.k, self.x, self.w, self.type
         if len(n) == 1:
             n = n[0]
@@ -153,12 +128,11 @@ class Linear(OperatorLayerBase):
             if self.dir == "fprop":
                 p = OrderedDict([('M', m), ('N', n), ('K', k), ('type', t)])
             elif self.dir == "bprop":
-                if self.sub == 0:  #dgrad (most likely)
+                if self.sub == 0:  # dgrad (most likely)
                     p = OrderedDict([('M', k), ('N', n), ('K', m), ('type', t)])
-                elif self.sub == 1:  #wgrad (most likely)
+                elif self.sub == 1:  # wgrad (most likely)
                     p = OrderedDict([('M', k), ('N', m), ('K', n), ('type', t)])
                 else:
-                    #This happens when there are additional kernels for reduction
                     p = OrderedDict([('X', x), ('W', w), ('type', t)])
             else:
                 assert False
@@ -173,7 +147,6 @@ class Linear(OperatorLayerBase):
         return self.op_
 
     def bytesFlops(self):
-
         m = self.m
         n = Utility.numElems(self.n)
         k = self.k
@@ -183,14 +156,13 @@ class Linear(OperatorLayerBase):
                 f = m * n * k * 2
                 b = m * n + m * k + n * k * Utility.typeToBytes(self.type)
             elif self.dir == "bprop":
-                if self.sub == 0:  #dgrad (most likely)
+                if self.sub == 0:  # dgrad (most likely)
                     f = m * n * k * 2
                     b = m * n + m * k + n * k * Utility.typeToBytes(self.type)
-                elif self.sub == 1:  #wgrad (most likely)
+                elif self.sub == 1:  # wgrad (most likely)
                     f = m * n * k * 2
                     b = m * n + m * k + n * k * Utility.typeToBytes(self.type)
                 else:
-                    #This happens when there are additional kernels for reduction
                     f = 0
                     b = 0
             else:
@@ -203,7 +175,6 @@ class Linear(OperatorLayerBase):
             assert False
         return b, f
 
-    # TODO: Fix bytes and flops with CUTLASS kernels.
     def bytes(self):
         b, f = self.bytesFlops()
         return b
